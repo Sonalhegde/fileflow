@@ -57,7 +57,7 @@ export async function POST(req: Request) {
 
     // Create file path
     const ext = (filenameIn ?? file.name).split(".").pop() ?? "png"
-    const path = `${code}.${ext}`
+    let path = `${code}.${ext}`
 
     console.log("Upload path:", path)
 
@@ -117,26 +117,46 @@ export async function POST(req: Request) {
     console.log("Public URL:", publicUrl)
 
     // Store in database
-    console.log("Saving to database...")
-    const { error: dbError } = await supabaseAdmin.from("shared_images").insert({
-      code,
-      filename: filenameIn ?? file.name,
-      file_path: path,
-      file_size: file.size,
-      mime_type: file.type,
-      public_url: publicUrl,
-    })
+    /* ----------------------------- ③  DB INSERT ----------------------------- */
+    let insertSuccess = false
+    let insertAttempts = 0
+    while (!insertSuccess && insertAttempts < maxAttempts) {
+      const { error: dbError } = await supabaseAdmin.from("shared_images").insert({
+        code,
+        filename: filenameIn ?? file.name,
+        file_path: path,
+        file_size: file.size,
+        mime_type: file.type,
+        public_url: publicUrl,
+      })
 
-    if (dbError) {
-      console.error("Database error:", dbError)
-      // Clean up uploaded file
+      if (!dbError) {
+        insertSuccess = true
+        break
+      }
+
+      // Duplicate-key (unique constraint) → generate a new code and retry
+      if (dbError.code === "23505" /* unique_violation */) {
+        console.warn("Code collision, retrying…")
+        insertAttempts += 1
+        code = Math.random().toString(36).slice(2, 8).toUpperCase()
+        path = `${code}.${ext}`
+        continue
+      }
+
+      // Any other DB failure: clean up the file and abort
+      console.error("Insert error:", JSON.stringify(dbError, null, 2))
       await supabaseAdmin.storage.from(bucket).remove([path])
       return NextResponse.json(
-        {
-          error: "Database save failed: " + dbError.message,
-        },
+        { error: `Database save failed: ${dbError.message || "unknown error"}` },
         { status: 500 },
       )
+    }
+
+    if (!insertSuccess) {
+      // Could not find a unique code after several attempts
+      await supabaseAdmin.storage.from(bucket).remove([path])
+      return NextResponse.json({ error: "Could not generate a unique code – please retry" }, { status: 500 })
     }
 
     console.log("Success! Code:", code)
