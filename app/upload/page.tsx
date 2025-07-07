@@ -65,13 +65,24 @@ export default function UploadPage() {
         body: formData,
       })
 
-      console.log("Response status:", response.status)
+      let responseData: any = null
+      let rawText = ""
 
-      const responseData = await response.json()
-      console.log("Response data:", responseData)
+      try {
+        // try to parse JSON even on failure – but fall back to text
+        rawText = await response.clone().text()
+        responseData = rawText ? JSON.parse(rawText) : null
+      } catch {
+        /* non-JSON */
+      }
 
       if (!response.ok) {
-        throw new Error(responseData.error || `Upload failed with status ${response.status}`)
+        const msg = responseData?.error || rawText || `Upload failed with status ${response.status}`
+        throw new Error(msg)
+      }
+
+      if (!responseData?.publicUrl || !responseData?.code) {
+        throw new Error("Invalid response from server – missing code or URL")
       }
 
       const { publicUrl, code, filename } = responseData
